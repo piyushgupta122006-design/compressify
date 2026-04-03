@@ -1,65 +1,242 @@
-import Image from "next/image";
+'use client';
 
+import { useState, useCallback, useEffect } from 'react';
+import { useDropzone } from 'react-dropzone';
+import { UploadCloud, File as FileIcon, Loader2, Download, RefreshCcw, Cloud } from 'lucide-react';
+let gapi: any;
+if (typeof window !== 'undefined') {
+  gapi = require('gapi-script').gapi;
+}
 export default function Home() {
+  const [file, setFile] = useState<File | null>(null);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [isUploadingDrive, setIsUploadingDrive] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+  const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+
+  // Initialize Google API Client
+  useEffect(() => {
+    const start = () => {
+      gapi.client.init({
+        clientId: CLIENT_ID,
+        scope: SCOPES,
+      });
+    };
+    gapi.load('client:auth2', start);
+  }, [CLIENT_ID]);
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    setError(null);
+    if (acceptedFiles.length > 0) {
+      setFile(acceptedFiles[0]);
+      setResult(null);
+    }
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'image/webp': ['.webp'],
+      'application/pdf': ['.pdf'],
+    },
+    maxFiles: 1,
+  });
+
+  const handleCompress = async () => {
+    if (!file) return;
+    setIsCompressing(true);
+    setError(null);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch('/api/compress', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Compression failed');
+      }
+      setResult(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsCompressing(false);
+    }
+  };
+
+  const handleDownload = () => {
+    if (!result) return;
+    const link = document.createElement('a');
+    link.href = `data:${result.mimeType};base64,${result.data}`;
+    link.download = `compressed_${result.fileName}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDriveUpload = async () => {
+    if (!result) return;
+    setIsUploadingDrive(true);
+    try {
+      const authInstance = gapi.auth2.getAuthInstance();
+      let user = authInstance.currentUser.get();
+      
+      if (!user.hasGrantedScopes(SCOPES)) {
+        user = await authInstance.signIn();
+      }
+      
+      const token = user.getAuthResponse().access_token;
+
+      // Convert Base64 payload to binary Blob for Google Drive
+      const byteCharacters = atob(result.data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], {type: result.mimeType});
+
+      // Step 1: Upload the file data directly to Drive
+      const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=media', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': result.mimeType,
+        },
+        body: blob
+      });
+      const uploadData = await uploadRes.json();
+
+      // Step 2: Rename the file in Drive (Patch Metadata)
+      await fetch(`https://www.googleapis.com/drive/v3/files/${uploadData.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name: `FYCS_compressed_${result.fileName}` })
+      });
+
+      alert('Success! File Saved to your Google Drive.');
+    } catch (error) {
+      console.error('Drive Upload Error:', error);
+      alert('Upload to Google Drive Failed. Check console for details.');
+    } finally {
+      setIsUploadingDrive(false);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="min-h-screen bg-neutral-950 text-white flex flex-col items-center justify-center p-6">
+      <div className="max-w-xl w-full space-y-8 text-center">
+        
+        <div className="space-y-2">
+          <h1 className="text-4xl font-bold tracking-tight text-green-400">FYCS-Compressor</h1>
+          <p className="text-neutral-400">Instantly compress Notes PDFs and Images securely.</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {error && (
+          <div className="bg-red-500/10 border border-red-500 text-red-500 p-4 rounded-lg">
+            {error}
+          </div>
+        )}
+
+        <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-8 shadow-2xl">
+          
+          {!result && (
+            <div 
+              {...getRootProps()} 
+              className={`border-2 border-dashed rounded-xl p-10 cursor-pointer transition-all flex flex-col items-center justify-center gap-4
+                ${isDragActive ? 'border-green-400 bg-green-400/5' : 'border-neutral-700 hover:border-neutral-500 hover:bg-neutral-800/50'}
+                ${file ? 'border-green-500 bg-green-500/5' : ''}
+              `}
+            >
+              <input {...getInputProps()} />
+              {file ? (
+                <>
+                  <FileIcon className="w-12 h-12 text-green-400" />
+                  <div className="text-sm">
+                    <p className="font-semibold text-white">{file.name}</p>
+                    <p className="text-neutral-400">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <UploadCloud className="w-12 h-12 text-neutral-400" />
+                  <p className="text-neutral-300 font-medium">Drag & drop your file here</p>
+                  <p className="text-xs text-neutral-500">Supports PDF, JPG, PNG, WEBP (Max 50MB)</p>
+                </>
+              )}
+            </div>
+          )}
+
+          {file && !result && (
+            <button
+              onClick={handleCompress}
+              disabled={isCompressing}
+              className="mt-6 w-full bg-green-500 hover:bg-green-600 text-black font-bold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {isCompressing ? <><Loader2 className="w-5 h-5 animate-spin" /> Compressing...</> : 'Compress File'}
+            </button>
+          )}
+
+          {result && (
+            <div className="space-y-6 animate-in fade-in zoom-in duration-300">
+              <div className="flex justify-center">
+                <div className="bg-green-500/20 p-4 rounded-full">
+                  <FileIcon className="w-12 h-12 text-green-400" />
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="bg-neutral-800 p-4 rounded-lg border border-neutral-700">
+                  <p className="text-neutral-400 mb-1">Original Size</p>
+                  <p className="font-bold text-lg">{(result.originalSize / 1024 / 1024).toFixed(2)} MB</p>
+                </div>
+                <div className="bg-neutral-800 p-4 rounded-lg border border-green-500/30">
+                  <p className="text-green-400 mb-1">Compressed Size</p>
+                  <p className="font-bold text-lg text-green-400">{(result.compressedSize / 1024 / 1024).toFixed(2)} MB</p>
+                </div>
+              </div>
+
+              {/* The New Google Drive Button */}
+              <button
+                  onClick={handleDriveUpload}
+                  disabled={isUploadingDrive}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isUploadingDrive ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving to Drive...</> : <><Cloud className="w-5 h-5" /> Save to Google Drive</>}
+              </button>
+
+              <div className="flex gap-4">
+                <button
+                  onClick={() => { setFile(null); setResult(null); }}
+                  className="flex-1 bg-neutral-800 hover:bg-neutral-700 text-white font-medium py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  <RefreshCcw className="w-4 h-4" /> Start Over
+                </button>
+                <button
+                  onClick={handleDownload}
+                  className="flex-1 bg-green-500 hover:bg-green-600 text-black font-bold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  <Download className="w-4 h-4" /> Download Local
+                </button>
+              </div>
+            </div>
+          )}
+
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }
